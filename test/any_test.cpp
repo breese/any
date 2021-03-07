@@ -8,6 +8,7 @@
 #include <vector>
 #include <utility>
 
+#include <boost/config.hpp>
 #include <boost/any.hpp>
 #include "test.hpp"
 
@@ -33,6 +34,10 @@ namespace any_tests // test suite
     void test_copy_ctor();
     void test_copy_assign();
     void test_converting_assign();
+    void test_emplace_assign();
+#ifndef BOOST_NO_CXX11_HDR_INITIALIZER_LIST
+    void test_emplace_initializer();
+#endif
     void test_bad_cast();
     void test_swap();
     void test_null_copying();
@@ -45,20 +50,24 @@ namespace any_tests // test suite
 
     const test_case test_cases[] =
     {
-        { "default construction",           test_default_ctor      },
-        { "single argument construction",   test_converting_ctor   },
-        { "copy construction",              test_copy_ctor         },
-        { "copy assignment operator",       test_copy_assign       },
-        { "converting assignment operator", test_converting_assign },
-        { "failed custom keyword cast",     test_bad_cast          },
-        { "swap member function",           test_swap              },
-        { "copying operations on a null",   test_null_copying      },
-        { "cast to reference types",        test_cast_to_reference },
-        { "storing an array inside",        test_with_array        },
-        { "implicit cast of returned value",test_with_func         },
-        { "clear() methods",                test_clear             },
-        { "testing with vectors",           test_vectors           },
-        { "class with operator&()",         test_addressof         }
+        { "default construction",           test_default_ctor        },
+        { "single argument construction",   test_converting_ctor     },
+        { "copy construction",              test_copy_ctor           },
+        { "copy assignment operator",       test_copy_assign         },
+        { "converting assignment operator", test_converting_assign   },
+        { "emplace assignment",             test_emplace_assign      },
+#ifndef BOOST_NO_CXX11_HDR_INITIALIZER_LIST
+        { "emplace initializer",            test_emplace_initializer },
+#endif
+        { "failed custom keyword cast",     test_bad_cast            },
+        { "swap member function",           test_swap                },
+        { "copying operations on a null",   test_null_copying        },
+        { "cast to reference types",        test_cast_to_reference   },
+        { "storing an array inside",        test_with_array          },
+        { "implicit cast of returned value",test_with_func           },
+        { "clear() methods",                test_clear               },
+        { "testing with vectors",           test_vectors             },
+        { "class with operator&()",         test_addressof           }
     };
 
     const test_case_iterator begin = test_cases;
@@ -175,6 +184,38 @@ namespace any_tests // test definitions
             "comparing address in copy against original text");
         check_equal(assign_result, &value, "address of assignment result");
     }
+
+    void test_emplace_assign()
+    {
+        std::string text = "test message";
+        any value;
+        value.emplace<std::string>(text.c_str());
+
+        check_false(value.empty(), "type");
+        check_equal(value.type(), boost::typeindex::type_id<std::string>(), "type");
+        check_null(any_cast<int>(&value), "any_cast<int>");
+        check_non_null(any_cast<std::string>(&value), "any_cast<std::string>");
+        check_equal(
+            any_cast<std::string>(value), text,
+            "comparing cast copy against original text");
+    }
+
+#ifndef BOOST_NO_CXX11_HDR_INITIALIZER_LIST
+    void test_emplace_initializer()
+    {
+        std::string text = "ABC";
+        any value;
+        value.emplace<std::string>({ 'A', 'B', 'C' });
+
+        check_false(value.empty(), "type");
+        check_equal(value.type(), boost::typeindex::type_id<std::string>(), "type");
+        check_null(any_cast<int>(&value), "any_cast<int>");
+        check_non_null(any_cast<std::string>(&value), "any_cast<std::string>");
+        check_equal(
+            any_cast<std::string>(value), text,
+            "comparing cast copy against original text");
+    }
+#endif
 
     void test_bad_cast()
     {

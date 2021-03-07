@@ -12,6 +12,7 @@
 //        with features contributed and bugs found by
 //        Antony Polukhin, Ed Brey, Mark Rodgers, 
 //        Peter Dimov, and James Curran
+//        dispatch table rewrite by Bjorn Reese
 // when:  July 2001, April 2013 - 2020
 
 #include <boost/config.hpp>
@@ -30,310 +31,368 @@
 #include <boost/type_traits/is_const.hpp>
 #include <boost/type_traits/conditional.hpp>
 
+#include <boost/core/exchange.hpp>
+#include <boost/core/swap.hpp>
+#include <boost/type_traits/is_copy_constructible.hpp>
+#include <boost/move/utility_core.hpp>
+
+#ifndef BOOST_NO_CXX11_HDR_INITIALIZER_LIST
+#include <initializer_list>
+#endif
+
 namespace boost
 {
-    class any
+namespace detail
+{
+
+template <typename T>
+struct any_decay
+{
+    typedef typename boost::remove_cv<typename boost::remove_reference<T>::type>::type type;
+};
+
+} // namespace detail
+
+class any
+{
+public:
+    BOOST_CONSTEXPR any() BOOST_NOEXCEPT {};
+
+    ~any()
     {
-    public: // structors
-
-        BOOST_CONSTEXPR any() BOOST_NOEXCEPT
-          : content(0)
+        if (has_value())
         {
+            interface->destroy(storage);
         }
-
-        template<typename ValueType>
-        any(const ValueType & value)
-          : content(new holder<
-                BOOST_DEDUCED_TYPENAME remove_cv<BOOST_DEDUCED_TYPENAME decay<const ValueType>::type>::type
-            >(value))
-        {
-        }
-
-        any(const any & other)
-          : content(other.content ? other.content->clone() : 0)
-        {
-        }
-
-#ifndef BOOST_NO_CXX11_RVALUE_REFERENCES
-        // Move constructor
-        any(any&& other) BOOST_NOEXCEPT
-          : content(other.content)
-        {
-            other.content = 0;
-        }
-
-        // Perfect forwarding of ValueType
-        template<typename ValueType>
-        any(ValueType&& value
-            , typename boost::disable_if<boost::is_same<any&, ValueType> >::type* = 0 // disable if value has type `any&`
-            , typename boost::disable_if<boost::is_const<ValueType> >::type* = 0) // disable if value has type `const ValueType&&`
-          : content(new holder< typename decay<ValueType>::type >(static_cast<ValueType&&>(value)))
-        {
-        }
-#endif
-
-        ~any() BOOST_NOEXCEPT
-        {
-            delete content;
-        }
-
-    public: // modifiers
-
-        any & swap(any & rhs) BOOST_NOEXCEPT
-        {
-            placeholder* tmp = content;
-            content = rhs.content;
-            rhs.content = tmp;
-            return *this;
-        }
-
-
-#ifdef BOOST_NO_CXX11_RVALUE_REFERENCES
-        template<typename ValueType>
-        any & operator=(const ValueType & rhs)
-        {
-            any(rhs).swap(*this);
-            return *this;
-        }
-
-        any & operator=(any rhs)
-        {
-            rhs.swap(*this);
-            return *this;
-        }
-
-#else 
-        any & operator=(const any& rhs)
-        {
-            any(rhs).swap(*this);
-            return *this;
-        }
-
-        // move assignment
-        any & operator=(any&& rhs) BOOST_NOEXCEPT
-        {
-            rhs.swap(*this);
-            any().swap(rhs);
-            return *this;
-        }
-
-        // Perfect forwarding of ValueType
-        template <class ValueType>
-        any & operator=(ValueType&& rhs)
-        {
-            any(static_cast<ValueType&&>(rhs)).swap(*this);
-            return *this;
-        }
-#endif
-
-    public: // queries
-
-        bool empty() const BOOST_NOEXCEPT
-        {
-            return !content;
-        }
-
-        void clear() BOOST_NOEXCEPT
-        {
-            any().swap(*this);
-        }
-
-        const boost::typeindex::type_info& type() const BOOST_NOEXCEPT
-        {
-            return content ? content->type() : boost::typeindex::type_id<void>().type_info();
-        }
-
-#ifndef BOOST_NO_MEMBER_TEMPLATE_FRIENDS
-    private: // types
-#else
-    public: // types (public so any_cast can be non-friend)
-#endif
-
-        class BOOST_SYMBOL_VISIBLE placeholder
-        {
-        public: // structors
-
-            virtual ~placeholder()
-            {
-            }
-
-        public: // queries
-
-            virtual const boost::typeindex::type_info& type() const BOOST_NOEXCEPT = 0;
-
-            virtual placeholder * clone() const = 0;
-
-        };
-
-        template<typename ValueType>
-        class holder
-#ifndef BOOST_NO_CXX11_FINAL
-          final
-#endif
-          : public placeholder
-        {
-        public: // structors
-
-            holder(const ValueType & value)
-              : held(value)
-            {
-            }
-
-#ifndef BOOST_NO_CXX11_RVALUE_REFERENCES
-            holder(ValueType&& value)
-              : held(static_cast< ValueType&& >(value))
-            {
-            }
-#endif
-        public: // queries
-
-            const boost::typeindex::type_info& type() const BOOST_NOEXCEPT BOOST_OVERRIDE
-            {
-                return boost::typeindex::type_id<ValueType>().type_info();
-            }
-
-            placeholder * clone() const BOOST_OVERRIDE
-            {
-                return new holder(held);
-            }
-
-        public: // representation
-
-            ValueType held;
-
-        private: // intentionally left unimplemented
-            holder & operator=(const holder &);
-        };
-
-#ifndef BOOST_NO_MEMBER_TEMPLATE_FRIENDS
-
-    private: // representation
-
-        template<typename ValueType>
-        friend ValueType * any_cast(any *) BOOST_NOEXCEPT;
-
-        template<typename ValueType>
-        friend ValueType * unsafe_any_cast(any *) BOOST_NOEXCEPT;
-
-#else
-
-    public: // representation (public so any_cast can be non-friend)
-
-#endif
-
-        placeholder * content;
-
-    };
- 
-    inline void swap(any & lhs, any & rhs) BOOST_NOEXCEPT
-    {
-        lhs.swap(rhs);
     }
 
-    class BOOST_SYMBOL_VISIBLE bad_any_cast :
+    any(const any& other)
+        : interface(other.interface)
+    {
+        if (other.interface)
+        {
+            other.interface->copy(storage, other.storage);
+        }
+    }
+
+    any& operator=(const any& other)
+    {
+        any(other).swap(*this);
+        return *this;
+    }
+
+#ifndef BOOST_NO_CXX11_RVALUE_REFERENCES
+    any(any&& other)
+        : storage(boost::move(other.storage)),
+          interface(boost::exchange(other.interface, (struct interface *)0))
+    {
+    }
+
+    any& operator=(any&& other)
+    {
+        any(boost::move(other)).swap(*this);
+        return *this;
+    }
+#endif
+
+    // Perfect forwarding of ValueType
+    template<typename ValueType,
+             typename = typename boost::enable_if_c<!boost::is_same<any, typename boost::decay<ValueType>::type>::value &&
+                                                    boost::is_copy_constructible<typename boost::decay<ValueType>::type>::value>::type>
+    any(ValueType&& value)
+        : interface(boost::addressof(dispatcher<typename boost::decay<ValueType>::type>::instance()))
+    {
+        dispatcher<typename boost::decay<ValueType>::type>::create(storage, boost::forward<ValueType>(value));
+    }
+
+    template <typename ValueType,
+             typename = typename boost::enable_if_c<!boost::is_same<any, typename boost::decay<ValueType>::type>::value &&
+                                                    boost::is_copy_constructible<typename boost::decay<ValueType>::type>::value>::type>
+    any& operator=(ValueType&& value)
+    {
+        any(boost::forward<ValueType>(value)).swap(*this);
+        return *this;
+    }
+
+#ifdef BOOST_NO_CXX11_VARIADIC_TEMPLATES
+    // Only one argument supported for pre-C++11
+    template <typename ValueType,
+              typename Arg1,
+              typename DecayType = typename boost::decay<ValueType>::type,
+              typename = typename boost::enable_if_c<boost::is_constructible<DecayType, Arg1>::value &&
+                                                     boost::is_copy_constructible<DecayType>::value>::type>
+    DecayType& emplace(Arg1&& arg1)
+    {
+        interface = boost::addressof(dispatcher<DecayType>::instance());
+        dispatcher<DecayType>::create(storage, boost::forward<Arg1>(arg1));
+        return *dispatcher<DecayType>::cast(storage);
+    }
+#else
+    template <typename ValueType,
+              typename... Args,
+              typename DecayType = typename boost::decay<ValueType>::type,
+              typename = typename boost::enable_if_c<boost::is_constructible<DecayType, Args...>::value &&
+                                                     boost::is_copy_constructible<DecayType>::value>::type>
+    DecayType& emplace(Args&&... args)
+    {
+        interface = boost::addressof(dispatcher<DecayType>::instance());
+        dispatcher<DecayType>::create(storage, boost::forward<Args>(args)...);
+        return *dispatcher<DecayType>::cast(storage);
+    }
+
+#ifndef BOOST_NO_CXX11_HDR_INITIALIZER_LIST
+    template <typename ValueType,
+              typename U,
+              typename... Args,
+              typename DecayType = typename boost::decay<ValueType>::type,
+              typename = typename boost::enable_if_c<boost::is_constructible<DecayType, std::initializer_list<U>&, Args...>::value &&
+                                                     boost::is_copy_constructible<DecayType>::value>::type>
+    DecayType& emplace(std::initializer_list<U> il, Args&&... args)
+    {
+        interface = boost::addressof(dispatcher<DecayType>::instance());
+        dispatcher<DecayType>::create(storage, boost::move(il), boost::forward<Args>(args)...);
+        return *dispatcher<DecayType>::cast(storage);
+    }
+
+#endif
+#endif
+
+    bool has_value() const BOOST_NOEXCEPT
+    {
+        return static_cast<bool>(interface);
+    }
+
+    bool empty() const BOOST_NOEXCEPT
+    {
+        return !has_value();
+    }
+
+    template <typename ValueType>
+    bool holds() const BOOST_NOEXCEPT
+    {
+        typedef BOOST_DEDUCED_TYPENAME boost::decay<ValueType>::type DecayType;
+        return interface == boost::addressof(dispatcher<DecayType>::instance());
+    }
+
+    any& swap(any& other) BOOST_NOEXCEPT
+    {
+        using boost::swap;
+        swap(interface, other.interface);
+        swap(storage, other.storage);
+        return *this;
+    }
+
+    void reset() BOOST_NOEXCEPT
+    {
+        any().swap(*this);
+    }
+
+    void clear() BOOST_NOEXCEPT
+    {
+        reset();
+    }
+
+    const boost::typeindex::type_info& type() const BOOST_NOEXCEPT
+    {
+        if (has_value())
+        {
+            return interface->type();
+        }
+        return boost::typeindex::type_id<void>().type_info();
+    }
+
+#ifndef BOOST_NO_MEMBER_TEMPLATE_FRIENDS
+
+private: // representation
+
+    template<typename ValueType>
+    friend ValueType * any_cast(any *) BOOST_NOEXCEPT;
+
+    template<typename ValueType>
+    friend const ValueType * any_cast(const any *) BOOST_NOEXCEPT;
+
+    template<typename ValueType>
+    friend ValueType * unsafe_any_cast(any *) BOOST_NOEXCEPT;
+
+#else
+
+public: // representation (public so any_cast can be non-friend)
+
+#endif
+
+    union storage_type
+    {
+        BOOST_CONSTEXPR BOOST_DEFAULTED_FUNCTION(storage_type() BOOST_NOEXCEPT, {});
+
+#ifndef BOOST_NO_CXX11_RVALUE_REFERENCES
+        BOOST_DEFAULTED_FUNCTION(storage_type(storage_type&&) BOOST_NOEXCEPT, {});
+        storage_type& BOOST_DEFAULTED_FUNCTION(operator=(storage_type&&) BOOST_NOEXCEPT, {});
+#endif
+
+        // First alternative
+        void *pointer = 0;
+
+        // Second alternative
+        BOOST_ALIGNMENT(void *) unsigned char buffer[sizeof(void *)];
+    } storage;
+
+    // Type-erased interface points to dispatch table for dispatcher<T>
+    struct BOOST_SYMBOL_VISIBLE interface
+    {
+        void (*destroy)(storage_type&);
+        void (*copy)(storage_type&, const storage_type&);
+        const boost::typeindex::type_info& (*type)();
+    } const * interface = 0;
+
+    // Allocated types
+    template <typename ValueType, typename = void>
+    struct BOOST_SYMBOL_VISIBLE dispatcher
+    {
+        static ValueType * cast(storage_type& self)
+        {
+            return static_cast<ValueType *>(self.pointer);
+        }
+
+        static const ValueType * cast(const storage_type& self)
+        {
+            return static_cast<const ValueType *>(self.pointer);
+        }
+
+#ifdef BOOST_NO_CXX11_VARIADIC_TEMPLATES
+        template <typename Arg1>
+        static void create(storage_type& self, BOOST_FWD_REF(Arg1) arg1)
+        {
+            self.pointer = new ValueType(boost::forward<Arg1>(arg1));
+        }
+#else
+        template <typename... Args>
+        static void create(storage_type& self, Args&&... args)
+        {
+            self.pointer = new ValueType{boost::forward<Args>(args)...};
+        }
+#endif
+
+        static void destroy(storage_type& self)
+        {
+            delete cast(self);
+        }
+
+        static void copy(storage_type& self, const storage_type& other)
+        {
+            create(self, *cast(other));
+        }
+
+        static const boost::typeindex::type_info& type()
+        {
+            return boost::typeindex::type_id<ValueType>().type_info();
+        }
+
+        static const struct interface& instance()
+        {
+            BOOST_STATIC_CONSTEXPR struct interface table = { &dispatcher::destroy, &dispatcher::copy, &dispatcher::type };
+            return table;
+        }
+    };
+
+};
+
+class BOOST_SYMBOL_VISIBLE bad_any_cast :
 #ifndef BOOST_NO_RTTI
         public std::bad_cast
 #else
         public std::exception
 #endif
+{
+public:
+    const char * what() const BOOST_NOEXCEPT_OR_NOTHROW BOOST_OVERRIDE
     {
-    public:
-        const char * what() const BOOST_NOEXCEPT_OR_NOTHROW BOOST_OVERRIDE
-        {
-            return "boost::bad_any_cast: "
-                   "failed conversion using boost::any_cast";
-        }
-    };
-
-    template<typename ValueType>
-    ValueType * any_cast(any * operand) BOOST_NOEXCEPT
-    {
-        return operand && operand->type() == boost::typeindex::type_id<ValueType>()
-            ? boost::addressof(
-                static_cast<any::holder<BOOST_DEDUCED_TYPENAME remove_cv<ValueType>::type> *>(operand->content)->held
-              )
-            : 0;
+        return "boost::bad_any_cast: failed conversion using boost::any_cast";
     }
+};
 
-    template<typename ValueType>
-    inline const ValueType * any_cast(const any * operand) BOOST_NOEXCEPT
+template <typename ValueType>
+ValueType * any_cast(any * operand) BOOST_NOEXCEPT
+{
+    typedef BOOST_DEDUCED_TYPENAME boost::detail::any_decay<ValueType>::type DecayType;
+    if (operand->holds<DecayType>())
     {
-        return any_cast<ValueType>(const_cast<any *>(operand));
+        return any::dispatcher<DecayType>::cast(operand->storage);
     }
+    return 0;
+}
 
-    template<typename ValueType>
-    ValueType any_cast(any & operand)
+template <typename ValueType>
+const ValueType * any_cast(const any * operand) BOOST_NOEXCEPT
+{
+    typedef BOOST_DEDUCED_TYPENAME boost::detail::any_decay<ValueType>::type DecayType;
+    if (operand->holds<DecayType>())
     {
-        typedef BOOST_DEDUCED_TYPENAME remove_reference<ValueType>::type nonref;
-
-
-        nonref * result = any_cast<nonref>(boost::addressof(operand));
-        if(!result)
-            boost::throw_exception(bad_any_cast());
-
-        // Attempt to avoid construction of a temporary object in cases when 
-        // `ValueType` is not a reference. Example:
-        // `static_cast<std::string>(*result);` 
-        // which is equal to `std::string(*result);`
-        typedef BOOST_DEDUCED_TYPENAME boost::conditional<
-            boost::is_reference<ValueType>::value,
-            ValueType,
-            BOOST_DEDUCED_TYPENAME boost::add_reference<ValueType>::type
-        >::type ref_type;
-
-#ifdef BOOST_MSVC
-#   pragma warning(push)
-#   pragma warning(disable: 4172) // "returning address of local variable or temporary" but *result is not local!
-#endif
-        return static_cast<ref_type>(*result);
-#ifdef BOOST_MSVC
-#   pragma warning(pop)
-#endif
+        return any::dispatcher<DecayType>::cast(operand->storage);
     }
+    return 0;
+}
 
-    template<typename ValueType>
-    inline ValueType any_cast(const any & operand)
-    {
-        typedef BOOST_DEDUCED_TYPENAME remove_reference<ValueType>::type nonref;
-        return any_cast<const nonref &>(const_cast<any &>(operand));
-    }
+template <typename ValueType,
+          typename DecayType = typename boost::detail::any_decay<ValueType>::type,
+          typename = typename boost::enable_if_c<boost::is_constructible<ValueType, const DecayType&>::value>::type>
+ValueType any_cast(const any & operand)
+{
+    const DecayType *p = any_cast<DecayType>(boost::addressof(operand));
+    if (p)
+        return static_cast<ValueType>(*p);
+
+    boost::throw_exception(bad_any_cast());
+}
+
+template <typename ValueType,
+          typename DecayType = typename boost::detail::any_decay<ValueType>::type,
+          typename = typename boost::enable_if_c<boost::is_constructible<ValueType, DecayType&>::value>::type>
+ValueType any_cast(any & operand)
+{
+    DecayType *p = any_cast<DecayType>(boost::addressof(operand));
+    if (p)
+        return static_cast<ValueType>(*p);
+
+    boost::throw_exception(bad_any_cast());
+}
 
 #ifndef BOOST_NO_CXX11_RVALUE_REFERENCES
-    template<typename ValueType>
-    inline ValueType any_cast(any&& operand)
-    {
-        BOOST_STATIC_ASSERT_MSG(
-            boost::is_rvalue_reference<ValueType&&>::value /*true if ValueType is rvalue or just a value*/
-            || boost::is_const< typename boost::remove_reference<ValueType>::type >::value,
-            "boost::any_cast shall not be used for getting nonconst references to temporary objects" 
-        );
-        return any_cast<ValueType>(operand);
-    }
+template <typename ValueType,
+          typename DecayType = typename boost::detail::any_decay<ValueType>::type,
+          typename = typename boost::enable_if_c<boost::is_constructible<ValueType, DecayType>::value>::type>
+ValueType any_cast(any&& operand)
+{
+    DecayType *p = any_cast<DecayType>(boost::addressof(operand));
+    if (p)
+        return static_cast<ValueType>(boost::move(*p));
+
+    boost::throw_exception(bad_any_cast());
+}
 #endif
 
-
-    // Note: The "unsafe" versions of any_cast are not part of the
-    // public interface and may be removed at any time. They are
-    // required where we know what type is stored in the any and can't
-    // use typeid() comparison, e.g., when our types may travel across
-    // different shared libraries.
-    template<typename ValueType>
-    inline ValueType * unsafe_any_cast(any * operand) BOOST_NOEXCEPT
-    {
-        return boost::addressof(
-            static_cast<any::holder<ValueType> *>(operand->content)->held
-        );
-    }
-
-    template<typename ValueType>
-    inline const ValueType * unsafe_any_cast(const any * operand) BOOST_NOEXCEPT
-    {
-        return unsafe_any_cast<ValueType>(const_cast<any *>(operand));
-    }
+// Note: The "unsafe" versions of any_cast are not part of the
+// public interface and may be removed at any time. They are
+// required where we know what type is stored in the any and can't
+// use typeid() comparison, e.g., when our types may travel across
+// different shared libraries.
+template<typename ValueType>
+ValueType * unsafe_any_cast(any * operand) BOOST_NOEXCEPT
+{
+    typedef BOOST_DEDUCED_TYPENAME boost::decay<ValueType>::type DecayType;
+    return any::dispatcher<DecayType>::cast(operand->storage);
 }
+
+template<typename ValueType>
+const ValueType * unsafe_any_cast(const any * operand) BOOST_NOEXCEPT
+{
+    return unsafe_any_cast<ValueType>(const_cast<any *>(operand));
+}
+
+} // namespace boost
 
 // Copyright Kevlin Henney, 2000, 2001, 2002. All rights reserved.
 // Copyright Antony Polukhin, 2013-2021.
+// Copyright Bjorn Reese, 2021.
 //
 // Distributed under the Boost Software License, Version 1.0. (See
 // accompanying file LICENSE_1_0.txt or copy at

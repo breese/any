@@ -299,7 +299,7 @@ namespace any_tests // test definitions
         move_copy_conting_class::copy_count = 0; 
         move_copy_conting_class::moves_count = 0;
 
-        move_copy_conting_class value1 = any_cast<move_copy_conting_class&&>(value);
+        move_copy_conting_class value1 = any_cast<move_copy_conting_class&&>(boost::move(value));
 
         check_equal(
             move_copy_conting_class::copy_count, 0u, 
