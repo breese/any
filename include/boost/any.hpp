@@ -167,11 +167,15 @@ public:
         return !has_value();
     }
 
+    // Checks if object has content of type ValueType.
+    //
+    // holds<void>() checks if object has no content.
+
     template <typename ValueType>
     bool holds() const BOOST_NOEXCEPT
     {
         typedef BOOST_DEDUCED_TYPENAME boost::decay<ValueType>::type DecayType;
-        return interface == boost::addressof(dispatcher<DecayType>::instance());
+        return dispatcher<DecayType>::holds(*this);
     }
 
     any& swap(any& other) BOOST_NOEXCEPT
@@ -246,7 +250,7 @@ public: // representation (public so any_cast can be non-friend)
 
     // Allocated types
     template <typename ValueType, typename = void>
-    struct BOOST_SYMBOL_VISIBLE dispatcher
+    struct dispatcher
     {
         static ValueType * cast(storage_type& self)
         {
@@ -256,6 +260,11 @@ public: // representation (public so any_cast can be non-friend)
         static const ValueType * cast(const storage_type& self)
         {
             return static_cast<const ValueType *>(self.pointer);
+        }
+
+        static bool holds(const any& self) BOOST_NOEXCEPT
+        {
+            return self.interface == boost::addressof(instance());
         }
 
 #ifdef BOOST_NO_CXX11_VARIADIC_TEMPLATES
@@ -294,6 +303,14 @@ public: // representation (public so any_cast can be non-friend)
         }
     };
 
+    template <typename Unused>
+    struct dispatcher<void, Unused>
+    {
+        static bool holds(const any& self) BOOST_NOEXCEPT
+        {
+            return !self.has_value();
+        }
+    };
 };
 
 class BOOST_SYMBOL_VISIBLE bad_any_cast :
