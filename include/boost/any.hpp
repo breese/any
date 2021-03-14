@@ -16,25 +16,20 @@
 // when:  July 2001, April 2013 - 2020
 
 #include <boost/config.hpp>
-#include <boost/type_index.hpp>
-#include <boost/type_traits/remove_reference.hpp>
+#include <boost/type_traits/conditional.hpp>
 #include <boost/type_traits/decay.hpp>
+#include <boost/type_traits/is_copy_constructible.hpp>
+#include <boost/type_traits/is_same.hpp>
+#include <boost/type_traits/remove_reference.hpp>
 #include <boost/type_traits/remove_cv.hpp>
-#include <boost/type_traits/add_reference.hpp>
-#include <boost/type_traits/is_reference.hpp>
-#include <boost/type_traits/is_const.hpp>
-#include <boost/throw_exception.hpp>
-#include <boost/static_assert.hpp>
 #include <boost/utility/enable_if.hpp>
 #include <boost/core/addressof.hpp>
-#include <boost/type_traits/is_same.hpp>
-#include <boost/type_traits/is_const.hpp>
-#include <boost/type_traits/conditional.hpp>
-
 #include <boost/core/exchange.hpp>
 #include <boost/core/swap.hpp>
-#include <boost/type_traits/is_copy_constructible.hpp>
 #include <boost/move/utility_core.hpp>
+#include <boost/move/traits.hpp>
+#include <boost/type_index.hpp>
+#include <boost/throw_exception.hpp>
 
 #ifndef BOOST_NO_CXX11_HDR_INITIALIZER_LIST
 #include <initializer_list>
@@ -233,11 +228,11 @@ public: // representation (public so any_cast can be non-friend)
         storage_type& BOOST_DEFAULTED_FUNCTION(operator=(storage_type&&) BOOST_NOEXCEPT, {});
 #endif
 
-        // First alternative
+        // Allocated alternative
         void *pointer = 0;
 
-        // Second alternative
-        BOOST_ALIGNMENT(void *) unsigned char buffer[sizeof(void *)];
+        // In-place alternative
+        BOOST_ALIGNMENT(boost::move_detail::max_align_t) unsigned char buffer[sizeof(void *)];
     } storage;
 
     // Type-erased interface points to dispatch table for dispatcher<T>
@@ -248,7 +243,7 @@ public: // representation (public so any_cast can be non-friend)
         const boost::typeindex::type_info& (*type)();
     } const * interface = 0;
 
-    // Allocated types
+    // Allocated storage
     template <typename ValueType, typename = void>
     struct dispatcher
     {
@@ -284,6 +279,62 @@ public: // representation (public so any_cast can be non-friend)
         static void destroy(storage_type& self)
         {
             delete cast(self);
+        }
+
+        static void copy(storage_type& self, const storage_type& other)
+        {
+            create(self, *cast(other));
+        }
+
+        static const boost::typeindex::type_info& type()
+        {
+            return boost::typeindex::type_id<ValueType>().type_info();
+        }
+
+        static const struct interface& instance()
+        {
+            BOOST_STATIC_CONSTEXPR struct interface table = { &dispatcher::destroy, &dispatcher::copy, &dispatcher::type };
+            return table;
+        }
+    };
+
+    // In-place storage for small-object optimization
+    template <typename ValueType>
+    struct dispatcher<ValueType,
+                      typename boost::enable_if_c<(sizeof(ValueType) <= sizeof(storage.buffer)) && boost::move_detail::is_trivially_move_constructible<ValueType>::value>::type>
+    {
+        static ValueType * cast(storage_type& self)
+        {
+            return boost::addressof(reinterpret_cast<ValueType&>(self.buffer));
+        }
+
+        static const ValueType * cast(const storage_type& self)
+        {
+            return boost::addressof(reinterpret_cast<const ValueType&>(self.buffer));
+        }
+
+        static bool holds(const any& self) BOOST_NOEXCEPT
+        {
+            return self.interface == boost::addressof(instance());
+        }
+
+#ifdef BOOST_NO_CXX11_VARIADIC_TEMPLATES
+        template <typename Arg1>
+        static void create(storage_type& self, BOOST_FWD_REF(Arg1) arg1)
+        {
+            new (boost::addressof(self.buffer)) ValueType(boost::forward<Arg1>(arg1));
+        }
+#else
+        template <typename... Args>
+        static void create(storage_type& self, Args&&... args)
+        {
+            new (boost::addressof(self.buffer)) ValueType{boost::forward<Args>(args)...};
+        }
+#endif
+
+        static void destroy(storage_type& self)
+        {
+            cast(self)->~ValueType();
         }
 
         static void copy(storage_type& self, const storage_type& other)
