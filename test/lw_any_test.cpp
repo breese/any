@@ -280,16 +280,72 @@ namespace cast_suite
 void cast_empty()
 {
     boost::any value;
-    BOOST_TEST_EQ(boost::any_cast<int>(&value), nullptr);
+    BOOST_TEST_THROWS(boost::any_cast<int>(value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<const int>(value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<volatile int>(value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<const volatile int>(value), boost::bad_any_cast);
 }
 
 void cast_const_empty()
 {
     const boost::any value;
+    BOOST_TEST_THROWS(boost::any_cast<int>(value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<const int>(value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<volatile int>(value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<const volatile int>(value), boost::bad_any_cast);
+}
+
+void castptr_empty()
+{
+    boost::any value;
     BOOST_TEST_EQ(boost::any_cast<int>(&value), nullptr);
+    BOOST_TEST_EQ(boost::any_cast<const int>(&value), nullptr);
+    BOOST_TEST_EQ(boost::any_cast<volatile int>(&value), nullptr);
+    BOOST_TEST_EQ(boost::any_cast<const volatile int>(&value), nullptr);
+}
+
+void castptr_const_empty()
+{
+    const boost::any value;
+    BOOST_TEST_EQ(boost::any_cast<int>(&value), nullptr);
+    BOOST_TEST_EQ(boost::any_cast<const int>(&value), nullptr);
+    BOOST_TEST_EQ(boost::any_cast<volatile int>(&value), nullptr);
+    BOOST_TEST_EQ(boost::any_cast<const volatile int>(&value), nullptr);
 }
 
 void cast_value()
+{
+    boost::any value = 42;
+    BOOST_TEST_EQ(boost::any_cast<int>(value), 42);
+    BOOST_TEST_EQ(boost::any_cast<const int>(value), 42);
+    BOOST_TEST_EQ(boost::any_cast<volatile int>(value), 42);
+    BOOST_TEST_EQ(boost::any_cast<const volatile int>(value), 42);
+
+    BOOST_TEST_THROWS(boost::any_cast<int *>(value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<const int *>(value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<volatile int *>(value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<const volatile int *>(value), boost::bad_any_cast);
+
+    BOOST_TEST_THROWS(boost::any_cast<float>(value), boost::bad_any_cast);
+}
+
+void cast_const_value()
+{
+    const boost::any value = 42;
+    BOOST_TEST_EQ(boost::any_cast<int>(value), 42);
+    BOOST_TEST_EQ(boost::any_cast<const int>(value), 42);
+    BOOST_TEST_EQ(boost::any_cast<volatile int>(value), 42);
+    BOOST_TEST_EQ(boost::any_cast<const volatile int>(value), 42);
+
+    BOOST_TEST_THROWS(boost::any_cast<int *>(value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<const int *>(value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<volatile int *>(value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<const volatile int *>(value), boost::bad_any_cast);
+
+    BOOST_TEST_THROWS(boost::any_cast<float>(value), boost::bad_any_cast);
+}
+
+void castptr_value()
 {
     boost::any value = 42;
     BOOST_TEST_EQ((*boost::any_cast<int>(&value)), 42);
@@ -305,7 +361,7 @@ void cast_value()
     BOOST_TEST_EQ(boost::any_cast<float>(&value), nullptr);
 }
 
-void cast_const_value()
+void castptr_const_value()
 {
     const boost::any value = 42;
     BOOST_TEST_EQ((*boost::any_cast<int>(&value)), 42);
@@ -321,12 +377,76 @@ void cast_const_value()
     BOOST_TEST_EQ(boost::any_cast<float>(&value), nullptr);
 }
 
+void cast_value_ref()
+{
+    boost::any value = 42;
+    BOOST_TEST_EQ(boost::any_cast<int&>(value), 42);
+    BOOST_TEST_EQ(boost::any_cast<const int&>(value), 42);
+    BOOST_TEST_EQ(boost::any_cast<volatile int&>(value), 42);
+    BOOST_TEST_EQ(boost::any_cast<const volatile int&>(value), 42);
+
+    BOOST_TEST_THROWS(boost::any_cast<int *&>(value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<const int *&>(value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<volatile int *&>(value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<const volatile int *&>(value), boost::bad_any_cast);
+
+    BOOST_TEST_THROWS(boost::any_cast<float&>(value), boost::bad_any_cast);
+}
+
+void cast_const_value_ref()
+{
+    // Casting non-const types must fail to compile
+
+    const boost::any value = 42;
+    // BOOST_TEST_EQ(boost::any_cast<int&>(value), 42);
+    BOOST_TEST_EQ(boost::any_cast<const int&>(value), 42);
+    // BOOST_TEST_EQ(boost::any_cast<volatile int&>(value), 42);
+    BOOST_TEST_EQ(boost::any_cast<const volatile int&>(value), 42);
+
+    // BOOST_TEST_THROWS(boost::any_cast<float&>(value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<const float&>(value), boost::bad_any_cast);
+}
+
+void castptr_value_ref()
+{
+    // Casting reference types must fail to compile
+
+    boost::any value = 42;
+    // BOOST_TEST_EQ(*(boost::any_cast<int&>(&value)), 42);
+
+    // This matches the any_cast(any&&) overload
+    BOOST_TEST_THROWS(boost::any_cast<const int&>(&value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<int&&>(&value), boost::bad_any_cast);
+}
+
+void castptr_const_value_ref()
+{
+    // Casting reference types must fail to compile
+
+    const boost::any value = 42;
+    // BOOST_TEST_EQ(*(boost::any_cast<int&>(&value)), 42);
+
+    // This matches the any_cast(any&&) overload
+    BOOST_TEST_THROWS(boost::any_cast<const int&>(&value), boost::bad_any_cast);
+    BOOST_TEST_THROWS(boost::any_cast<int&&>(&value), boost::bad_any_cast);
+}
+
 void run()
 {
     cast_empty();
     cast_const_empty();
+    castptr_empty();
+    castptr_const_empty();
+
     cast_value();
     cast_const_value();
+    castptr_value();
+    castptr_const_value();
+
+    cast_value_ref();
+    cast_const_value_ref();
+    castptr_value_ref();
+    castptr_const_value_ref();
 }
 
 } // namespace cast_suite

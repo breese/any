@@ -16,7 +16,6 @@
 // when:  July 2001, April 2013 - 2020
 
 #include <boost/config.hpp>
-#include <boost/type_traits/conditional.hpp>
 #include <boost/type_traits/decay.hpp>
 #include <boost/type_traits/is_copy_constructible.hpp>
 #include <boost/type_traits/is_same.hpp>
@@ -95,9 +94,9 @@ public:
              typename = typename boost::enable_if_c<!boost::is_same<any, typename boost::decay<ValueType>::type>::value &&
                                                     boost::is_copy_constructible<typename boost::decay<ValueType>::type>::value>::type>
     any(ValueType&& value)
-        : interface(boost::addressof(dispatcher<typename boost::decay<ValueType>::type>::instance()))
+        : interface(boost::addressof(table<typename boost::decay<ValueType>::type>::instance()))
     {
-        dispatcher<typename boost::decay<ValueType>::type>::create(storage, boost::forward<ValueType>(value));
+        overload<typename boost::decay<ValueType>::type>::create(storage, boost::forward<ValueType>(value));
     }
 
     template <typename ValueType,
@@ -118,9 +117,9 @@ public:
                                                      boost::is_copy_constructible<DecayType>::value>::type>
     DecayType& emplace(Arg1&& arg1)
     {
-        interface = boost::addressof(dispatcher<DecayType>::instance());
-        dispatcher<DecayType>::create(storage, boost::forward<Arg1>(arg1));
-        return *dispatcher<DecayType>::cast(storage);
+        interface = boost::addressof(table<DecayType>::instance());
+        overload<DecayType>::create(storage, boost::forward<Arg1>(arg1));
+        return *overload<DecayType>::cast(storage);
     }
 #else
     template <typename ValueType,
@@ -130,9 +129,9 @@ public:
                                                      boost::is_copy_constructible<DecayType>::value>::type>
     DecayType& emplace(Args&&... args)
     {
-        interface = boost::addressof(dispatcher<DecayType>::instance());
-        dispatcher<DecayType>::create(storage, boost::forward<Args>(args)...);
-        return *dispatcher<DecayType>::cast(storage);
+        interface = boost::addressof(table<DecayType>::instance());
+        overload<DecayType>::create(storage, boost::forward<Args>(args)...);
+        return *overload<DecayType>::cast(storage);
     }
 
 #ifndef BOOST_NO_CXX11_HDR_INITIALIZER_LIST
@@ -144,9 +143,9 @@ public:
                                                      boost::is_copy_constructible<DecayType>::value>::type>
     DecayType& emplace(std::initializer_list<U> il, Args&&... args)
     {
-        interface = boost::addressof(dispatcher<DecayType>::instance());
-        dispatcher<DecayType>::create(storage, boost::move(il), boost::forward<Args>(args)...);
-        return *dispatcher<DecayType>::cast(storage);
+        interface = boost::addressof(table<DecayType>::instance());
+        overload<DecayType>::create(storage, boost::move(il), boost::forward<Args>(args)...);
+        return *overload<DecayType>::cast(storage);
     }
 
 #endif
@@ -170,7 +169,7 @@ public:
     bool holds() const BOOST_NOEXCEPT
     {
         typedef BOOST_DEDUCED_TYPENAME boost::decay<ValueType>::type DecayType;
-        return dispatcher<DecayType>::holds(*this);
+        return overload<DecayType>::holds(*this);
     }
 
     any& swap(any& other) BOOST_NOEXCEPT
@@ -235,17 +234,17 @@ public: // representation (public so any_cast can be non-friend)
         BOOST_ALIGNMENT(boost::move_detail::max_align_t) unsigned char buffer[sizeof(void *)];
     } storage;
 
-    // Type-erased interface points to dispatch table for dispatcher<T>
-    struct BOOST_SYMBOL_VISIBLE interface
+    // Type-erased interface points to dispatch table for overload<T>
+    struct interface
     {
         void (*destroy)(storage_type&);
         void (*copy)(storage_type&, const storage_type&);
-        const boost::typeindex::type_info& (*type)();
+        const boost::typeindex::type_info& (*type)() BOOST_NOEXCEPT;
     } const * interface = 0;
 
     // Allocated storage
     template <typename ValueType, typename = void>
-    struct dispatcher
+    struct overload
     {
         static ValueType * cast(storage_type& self)
         {
@@ -259,7 +258,7 @@ public: // representation (public so any_cast can be non-friend)
 
         static bool holds(const any& self) BOOST_NOEXCEPT
         {
-            return self.interface == boost::addressof(instance());
+            return self.interface == boost::addressof(table<ValueType>::instance());
         }
 
 #ifdef BOOST_NO_CXX11_VARIADIC_TEMPLATES
@@ -286,22 +285,16 @@ public: // representation (public so any_cast can be non-friend)
             create(self, *cast(other));
         }
 
-        static const boost::typeindex::type_info& type()
+        static const boost::typeindex::type_info& type() BOOST_NOEXCEPT
         {
             return boost::typeindex::type_id<ValueType>().type_info();
-        }
-
-        static const struct interface& instance()
-        {
-            BOOST_STATIC_CONSTEXPR struct interface table = { &dispatcher::destroy, &dispatcher::copy, &dispatcher::type };
-            return table;
         }
     };
 
     // In-place storage for small-object optimization
     template <typename ValueType>
-    struct dispatcher<ValueType,
-                      typename boost::enable_if_c<(sizeof(ValueType) <= sizeof(storage.buffer)) && boost::move_detail::is_trivially_move_constructible<ValueType>::value>::type>
+    struct overload<ValueType,
+                    typename boost::enable_if_c<(sizeof(ValueType) <= sizeof(storage.buffer)) && boost::move_detail::is_trivially_move_constructible<ValueType>::value>::type>
     {
         static ValueType * cast(storage_type& self)
         {
@@ -315,7 +308,7 @@ public: // representation (public so any_cast can be non-friend)
 
         static bool holds(const any& self) BOOST_NOEXCEPT
         {
-            return self.interface == boost::addressof(instance());
+            return self.interface == boost::addressof(table<ValueType>::instance());
         }
 
 #ifdef BOOST_NO_CXX11_VARIADIC_TEMPLATES
@@ -342,24 +335,28 @@ public: // representation (public so any_cast can be non-friend)
             create(self, *cast(other));
         }
 
-        static const boost::typeindex::type_info& type()
+        static const boost::typeindex::type_info& type() BOOST_NOEXCEPT
         {
             return boost::typeindex::type_id<ValueType>().type_info();
-        }
-
-        static const struct interface& instance()
-        {
-            BOOST_STATIC_CONSTEXPR struct interface table = { &dispatcher::destroy, &dispatcher::copy, &dispatcher::type };
-            return table;
         }
     };
 
     template <typename Unused>
-    struct dispatcher<void, Unused>
+    struct overload<void, Unused>
     {
         static bool holds(const any& self) BOOST_NOEXCEPT
         {
             return !self.has_value();
+        }
+    };
+
+    template <typename T>
+    struct table
+    {
+        static const struct interface& instance()
+        {
+            BOOST_STATIC_CONSTEXPR struct interface data = { &overload<T>::destroy, &overload<T>::copy, &overload<T>::type };
+            return data;
         }
     };
 };
@@ -384,7 +381,7 @@ ValueType * any_cast(any * operand) BOOST_NOEXCEPT
     typedef BOOST_DEDUCED_TYPENAME boost::detail::any_decay<ValueType>::type DecayType;
     if (operand->holds<DecayType>())
     {
-        return any::dispatcher<DecayType>::cast(operand->storage);
+        return any::overload<DecayType>::cast(operand->storage);
     }
     return 0;
 }
@@ -395,7 +392,7 @@ const ValueType * any_cast(const any * operand) BOOST_NOEXCEPT
     typedef BOOST_DEDUCED_TYPENAME boost::detail::any_decay<ValueType>::type DecayType;
     if (operand->holds<DecayType>())
     {
-        return any::dispatcher<DecayType>::cast(operand->storage);
+        return any::overload<DecayType>::cast(operand->storage);
     }
     return 0;
 }
@@ -447,7 +444,7 @@ template<typename ValueType>
 ValueType * unsafe_any_cast(any * operand) BOOST_NOEXCEPT
 {
     typedef BOOST_DEDUCED_TYPENAME boost::decay<ValueType>::type DecayType;
-    return any::dispatcher<DecayType>::cast(operand->storage);
+    return any::overload<DecayType>::cast(operand->storage);
 }
 
 template<typename ValueType>
